@@ -18,6 +18,7 @@ Run from scripts/Kangaroo/:
 from __future__ import annotations
 
 import argparse
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import jax
@@ -441,6 +442,48 @@ def run_optimizer(
 
 
 ###############################################################################
+# XML export
+###############################################################################
+
+
+def save_optimized_xml(
+    xml_path: Path,
+    joint_name: str,
+    best_phys: dict[str, np.ndarray],
+) -> Path:
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
+
+    # Update joint attributes (armature, damping, frictionloss)
+    joint_el = root.find(f".//*joint[@name='{joint_name}']")
+    if joint_el is None:
+        raise ValueError(f"Joint {joint_name!r} not found in XML.")
+    for field in ("armature", "damping", "frictionloss"):
+        if field in best_phys:
+            joint_el.set(field, f"{float(best_phys[field].flat[0]):.8f}")
+
+    # Find the body that contains this joint → update inertial
+    for body in root.iter("body"):
+        if any(c.tag == "joint" and c.get("name") == joint_name for c in body):
+            inertial = body.find("inertial")
+            if inertial is not None:
+                if "mass" in best_phys:
+                    inertial.set("mass", f"{float(best_phys['mass'].flat[0]):.8f}")
+                if "inertia" in best_phys:
+                    v = best_phys["inertia"].reshape(-1)
+                    inertial.set("diaginertia", f"{v[0]:.8f} {v[1]:.8f} {v[2]:.8f}")
+                if "ipos" in best_phys:
+                    v = best_phys["ipos"].reshape(-1)
+                    inertial.set("pos", f"{v[0]:.8f} {v[1]:.8f} {v[2]:.8f}")
+            break
+
+    out_path = xml_path.parent / (xml_path.stem + "_sysid.xml")
+    ET.indent(tree, space="  ")
+    tree.write(out_path, encoding="unicode", xml_declaration=False)
+    return out_path
+
+
+###############################################################################
 # Main
 ###############################################################################
 
@@ -499,6 +542,9 @@ def main() -> None:
     print(f"  loss MSE:     {best_loss:.8e}")
     print(f"  loss RMS:     {np.sqrt(best_loss):.8e} rad")
     _print_phys(best_phys)
+
+    out_xml = save_optimized_xml(args.xml.resolve(), args.joint, best_phys)
+    print(f"\nSaved optimized XML → {out_xml}")
 
 
 if __name__ == "__main__":
