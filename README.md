@@ -1,6 +1,66 @@
 # Kangaroo SysID Scripts
 
-Diese Skripte bauen die Kangaroo-SysID-Pipeline schrittweise neu auf.
+Diese Skripte implementieren eine gradientenbasierte System-Identifikation (SysID)
+für den Kangaroo-Arm mit MuJoCo MJX als differenzierbarem Simulator.
+
+## Methode: Gradient-Based System Identification
+
+### Problemformulierung
+
+Sei $\theta \in \mathbb{R}^d$ ein Vektor physikalischer Parameter
+(hier: `armature`, `damping`, `frictionloss` des Ellenbogengelenks).
+
+Das **reale System** entwickelt sich nach unbekannter Dynamik:
+
+$$s_{i+1}^r = \Phi_{\text{real}}(s_i^r,\, a_i^r;\, \theta^*)$$
+
+Der **Simulator** approximiert diese Dynamik differenzierbar:
+
+$$s_{i+1} = \Phi_{\text{sim}}(s_i^r,\, a_i^r;\, \theta)$$
+
+wobei $s_i$ der Systemzustand $(q, \dot{q})$, $a_i^r$ die aufgezeichneten realen
+Steuerbefehle und $\theta^*$ die unbekannten wahren Parameter sind.
+
+Gegeben eine reale Trajektorie $\tau^r = \{s_0^r, a_0^r, \ldots, s_N^r\}$ ist
+das Ziel, $\theta$ so zu schätzen, dass die simulierte Trajektorie
+$\tau^s(\theta) = \{s_0^s, \ldots, s_N^s\}$ mit $s_0^s = s_0^r$ die reale
+Trajektorie möglichst genau nachbildet.
+
+### Loss-Funktion
+
+Es wird ein **q-only MSE Loss** über zufällige Trajektorienfragmente verwendet.
+Pro Iteration werden $B$ zufällige Startpunkte gezogen. Jedes Fragment der Länge
+$H$ wird mit realem Anfangszustand initialisiert und mit den realen
+Steuerbefehlen in MJX abgespielt:
+
+$$\mathcal{L}(\theta) = \frac{1}{B \cdot H} \sum_{b=1}^{B} \sum_{i=0}^{H-1}
+\left( q_{\text{sim},\,i+1}^{(b)}(\theta) - q_{\text{real},\,i+1}^{(b)} \right)^2$$
+
+mit:
+- $B$ — Batch-Größe (zufällige Startpunkte)
+- $H$ — Horizont (Fragmentlänge in Schritten)
+- $q_{\text{sim}}$ — simulierte Gelenkposition nach einem MJX-Schritt
+- $q_{\text{real}}$ — aufgezeichnete reale Gelenkposition im nächsten Schritt
+
+### Log-Parametrisierung
+
+Da alle Parameter physikalisch positiv sein müssen, wird in Log-Space optimiert:
+
+$$\varphi = \log(\theta), \quad \theta = \exp(\varphi)$$
+
+Der Gradient $\frac{\partial \mathcal{L}}{\partial \varphi}$ wird mit
+**Forward-Mode Automatic Differentiation** berechnet (`jax.jacfwd`), da
+Reverse-Mode bei MJX-Constraints (interner `while_loop`) problematisch ist.
+
+Die Optimierung erfolgt mit **Adam** auf $\varphi$.
+
+### Gradienten: Forward-Mode vs. Reverse-Mode
+
+MJX löst Constraints intern mit einem iterativen Solver (`while_loop`).
+`jax.grad` (Reverse-Mode) kann durch solche Schleifen nicht stabil
+differenzieren. `jax.jacfwd` (Forward-Mode) propagiert Tangenten vorwärts
+und umgeht dieses Problem. Für wenige Parameter ($d = 3$) ist Forward-Mode
+effizient genug.
 
 ## Datensatzformat
 
@@ -108,7 +168,7 @@ Der Plot wird automatisch in `scripts/Kangaroo/datasets/` gespeichert.
 
 ### 5. Parameter optimieren
 
-`03_optimize_q.py` nutzt Paper-nahe Trajektorien-Fragmente:
+`optimize_joint_params.py` nutzt Paper-nahe Trajektorien-Fragmente:
 
 ```text
 pro Iteration:
@@ -130,7 +190,7 @@ eval  = immer derselbe feste Eval-Batch
 Alle drei aktuellen Parameter optimieren:
 
 ```bash
-python scripts/Kangaroo/03_optimize_q.py \
+python scripts/Kangaroo/optimize_joint_params.py \
   --npz scripts/Kangaroo/datasets/left_elbow_chirp_20260530_081011_sysid.npz \
   --horizon 100 \
   --batch-size 16 \
@@ -165,7 +225,7 @@ python scripts/Kangaroo/plot_kangaroo_sim_vs_real.py \
 Nur MJX-Simulation:
 
 ```bash
-python scripts/Kangaroo/04_render_mjx_dataset_video.py \
+python scripts/Kangaroo/render_dataset_video.py \
   --npz scripts/Kangaroo/datasets/left_elbow_chirp_20260530_081011_sysid.npz \
   --mode sim \
   --start 0 \
@@ -177,7 +237,7 @@ python scripts/Kangaroo/04_render_mjx_dataset_video.py \
 Real links, MJX rechts:
 
 ```bash
-python scripts/Kangaroo/04_render_mjx_dataset_video.py \
+python scripts/Kangaroo/render_dataset_video.py \
   --npz scripts/Kangaroo/datasets/left_elbow_chirp_20260530_081011_sysid.npz \
   --mode side-by-side \
   --start 0 \
@@ -252,27 +312,14 @@ plot_kangaroo_sim_vs_real.py
 Konvertieren und Prüfen der realen Kangaroo-Daten.
 
 ```text
-01_rollout_fixed_params.py
+optimize_joint_params.py
 ```
 
-Lädt XML und SysID-NPZ, setzt feste Parameter und spielt reale `ctrl`-Commands
-in MJX ab. Gibt `q_sim` vs. `q_real` Diagnosewerte aus.
+Optimiert ausgewählte Parameter (`armature`, `damping`, `frictionloss`) mit Adam
+auf einem q-only Loss über zufällige Trajektorien-Fragmente.
 
 ```text
-02_loss_grad_q.py
-```
-
-Berechnet einen q-only Loss und Forward-Mode-Gradienten nach
-`armature`, `damping` und `frictionloss`.
-
-```text
-03_optimize_q.py
-```
-
-Optimiert ausgewählte Parameter mit Adam auf einem q-only Loss.
-
-```text
-04_render_mjx_dataset_video.py
+render_dataset_video.py
 ```
 
 Rendert ein Video aus realem Dataset-Playback und/oder MJX-Rollout.
