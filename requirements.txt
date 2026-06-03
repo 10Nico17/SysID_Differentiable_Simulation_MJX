@@ -1,0 +1,20 @@
+# Python 3.11+ recommended, CUDA 12 required
+#
+# Install:
+#   conda create -n mjx_sysid python=3.11 -y
+#   conda activate mjx_sysid
+#   pip install "jax[cuda12]" --find-links https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+#   pip install -r requirements.txt
+#
+# Verify GPU:
+#   python -c "import jax; print(jax.devices())"
+#   # should print: [CudaDevice(id=0)]
+
+mujoco==3.9.0
+mujoco-mjx==3.9.0
+jax==0.10.1
+jaxlib==0.10.1
+optax==0.2.8
+numpy==2.4.6
+matplotlib==3.10.9
+scipy==1.17.1
