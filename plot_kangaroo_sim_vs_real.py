@@ -27,7 +27,7 @@ DATASET_DIR = KANGAROO_DIR / "datasets"
 DEFAULT_NPZ = (
     DATASET_DIR / "left_elbow_chirp_20260530_081011_sysid.npz"
 )
-DEFAULT_XML = ROOT / "assets/robots/kangaroo_grippers/kangaroo_grippers_mjx.xml"
+DEFAULT_XML = KANGAROO_DIR / "Robot/kangaroo_grippers_mjx.xml"
 
 JOINT_NAME = "arm_left_4_joint"
 ACT_IDX = 19
