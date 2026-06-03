@@ -30,10 +30,11 @@ import numpy as np
 from mujoco import mjx
 
 
-ROOT = Path(__file__).resolve().parents[2]
+KANGAROO_DIR = Path(__file__).resolve().parent
+ROOT = KANGAROO_DIR.parents[1]
+DATASET_DIR = KANGAROO_DIR / "datasets"
 DEFAULT_NPZ = (
-    ROOT
-    / "assets/datasets/kangaroo_grippers/left_elbow_chirp_20260530_081011_sysid.npz"
+    DATASET_DIR / "left_elbow_chirp_20260530_081011_sysid.npz"
 )
 DEFAULT_XML = ROOT / "assets/robots/kangaroo_grippers/kangaroo_grippers_mjx.xml"
 
@@ -308,7 +309,7 @@ def main() -> None:
     out_path = (
         args.out.resolve()
         if args.out is not None
-        else npz_path.with_suffix(".mjx_real_vs_sim.mp4")
+        else DATASET_DIR / f"{npz_path.stem}.mjx_real_vs_sim.mp4"
     )
 
     time, ctrl, qpos_real, qvel_real, dt = load_sysid_npz(npz_path)

@@ -18,10 +18,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-ROOT = Path(__file__).resolve().parents[2]
+KANGAROO_DIR = Path(__file__).resolve().parent
+ROOT = KANGAROO_DIR.parents[1]
+DATASET_DIR = KANGAROO_DIR / "datasets"
 DEFAULT_NPZ = (
-    ROOT
-    / "assets/datasets/kangaroo_grippers/left_elbow_chirp_20260530_081011_sysid.npz"
+    DATASET_DIR / "left_elbow_chirp_20260530_081011_sysid.npz"
 )
 
 JOINT_NAME = "arm_left_4_joint"
@@ -131,7 +132,11 @@ def main() -> None:
     axes[3].grid(True, alpha=0.3)
 
     plt.tight_layout()
-    out = args.out if args.out is not None else npz_path.with_suffix(".plot.png")
+    out = (
+        args.out
+        if args.out is not None
+        else DATASET_DIR / f"{npz_path.stem}.plot.png"
+    )
     plt.savefig(out, dpi=150)
     print(f"Saved -> {out}")
 
