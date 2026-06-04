@@ -106,14 +106,8 @@ qpos: (T, 39)
 qvel: (T, 38)
 ```
 
-Für einzelne Joints werden die Indizes aus dem XML bestimmt. Für
-`arm_left_4_joint` sind es z.B.:
-
-```text
-ctrl[:, 19] -> Command
-qpos[:, 12] -> Position q
-qvel[:, 11] -> Geschwindigkeit dq
-```
+Für die Arm-Joints werden `ctrl`, `qpos` und `qvel` Indizes automatisch aus dem
+XML bestimmt. Manuelle Index-Listen sind im Workflow nicht nötig.
 
 Nützliche Daten- und Plot-Skripte liegen ebenfalls in diesem Ordner:
 
@@ -221,36 +215,56 @@ train = aktueller zufälliger Batch
 eval  = immer derselbe feste Eval-Batch
 ```
 
-Alle drei aktuellen Parameter optimieren:
+Alle aktuell im Skript aktivierten Parameter für beide Arme optimieren:
 
 ```bash
 python scripts/Kangaroo/optimize_joint_params.py \
-  --npz scripts/Kangaroo/datasets/left_elbow_chirp_20260530_081011_sysid.npz \
+  --npz scripts/Kangaroo/datasets/Arms_sysid.npz \
   --horizon 100 \
   --batch-size 16 \
   --eval-batch-size 16 \
   --max-iter 300 \
-  --lr 0.002 \
-  --armature 0.00663065 \
-  --damping 0.0001 \
-  --frictionloss 0.0001 \
-  --optimize armature damping frictionloss
+  --lr 0.002
 ```
 
-Wichtig: `damping` und `frictionloss` starten im XML bei `0.0`. Für die
-Log-Parametrisierung ist ein kleiner positiver Startwert wie `0.0001`
-praktischer.
+Der Loss mittelt dann über alle 14 Arm-Joints:
+
+```text
+arm_left_1_joint  ... arm_left_7_joint
+arm_right_1_joint ... arm_right_7_joint
+```
+
+Für jeden dieser Joints bekommt jeder aktivierte Parameter einen eigenen
+optimierbaren Wert.
+
+Aktuell aktivierte Parameter in `optimize_joint_params.py`:
+
+```python
+ACTUATOR_PARAM_NAMES = ("armature", "damping", "frictionloss")
+BODY_PARAM_NAMES = ("mass", "inertia", "ipos")
+```
+
+`damping` und `frictionloss` starten im XML teils bei `0.0`. Für die
+Log-Parametrisierung setzt das Skript intern einen kleinen positiven Startwert
+von `0.0001`.
 
 ### 6. Nach Optimierung plotten
 
-Die besten Werte aus der Ausgabe in den Plot übernehmen:
+Der Optimizer schreibt ein neues XML:
+
+```text
+scripts/Kangaroo/Robot/kangaroo_grippers_mjx_sysid.xml
+```
+
+Dieses XML kann direkt für den Vergleichsplot verwendet werden:
 
 ```bash
 python scripts/Kangaroo/plot_kangaroo_sim_vs_real.py \
-  scripts/Kangaroo/datasets/left_elbow_chirp_20260530_081011_sysid.npz \
-  --armature 0.00394267 \
-  --damping 0.00014238 \
-  --frictionloss 0.00010000
+  scripts/Kangaroo/datasets/Arms_sysid.npz \
+  --xml scripts/Kangaroo/Robot/kangaroo_grippers_mjx_sysid.xml \
+  --all-arm-joints \
+  --arm-side both \
+  --split-joints
 ```
 
 Der Plot wird fest in `scripts/Kangaroo/datasets/plots_sim_vs_real/`
@@ -351,8 +365,8 @@ Konvertieren und Prüfen der realen Kangaroo-Daten.
 optimize_joint_params.py
 ```
 
-Optimiert ausgewählte Parameter (`armature`, `damping`, `frictionloss`) mit Adam
-auf einem q-only Loss über zufällige Trajektorien-Fragmente.
+Optimiert alle oben im Skript aktivierten Parameter für alle 14 Arm-Joints mit
+Adam auf einem q-only Loss über zufällige Trajektorien-Fragmente.
 
 ```text
 render_dataset_video.py
