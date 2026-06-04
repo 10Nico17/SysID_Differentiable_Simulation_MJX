@@ -1,0 +1,21 @@
+tmux new -s sysid
+
+conda activate mjx_sysid
+
+tmux attach -t sysid
+
+
+
+python optimize_joint_params.py \
+  --npz datasets/left_elbow_chirp_20260530_081011_sysid.npz \
+  --horizon 12559 \
+  --batch-size 1 \
+  --eval-batch-size 1 \
+  --start 0 \
+  --max-iter 500 \
+  --lr 0.001 \
+  --reg 0.1 \
+  --log-every 10
+
+
+[    0] train=3.565408e-02  eval=3.564236e-02  rms=1.887919e-01  armature=0.006624  damping=0.000000  frictionloss=0.000000  mass=1.804955  inertia=[0.0026,0.0025,0.0015]  ipos=[-0.0657,0.0093,-0.0361]

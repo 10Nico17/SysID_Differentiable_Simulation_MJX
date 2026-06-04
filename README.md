@@ -8,7 +8,7 @@ für den Kangaroo-Arm mit MuJoCo MJX als differenzierbarem Simulator.
 ### Problemformulierung
 
 Sei $\theta \in \mathbb{R}^d$ ein Vektor physikalischer Parameter
-(hier: `armature`, `damping`, `frictionloss` des Ellenbogengelenks).
+(z.B. `armature`, `damping`, `frictionloss` eines Armgelenks).
 
 Das **reale System** entwickelt sich nach unbekannter Dynamik:
 
@@ -106,7 +106,8 @@ qpos: (T, 39)
 qvel: (T, 38)
 ```
 
-Für `arm_left_4_joint` werden aktuell diese Indizes verwendet:
+Für einzelne Joints werden die Indizes aus dem XML bestimmt. Für
+`arm_left_4_joint` sind es z.B.:
 
 ```text
 ctrl[:, 19] -> Command
@@ -119,7 +120,10 @@ Nützliche Daten- und Plot-Skripte liegen ebenfalls in diesem Ordner:
 ```bash
 # Rohe ROS-NPZ prüfen
 python scripts/Kangaroo/plot_kangaroo_real_npz.py \
-  scripts/Kangaroo/datasets/DEINE_REAL_AUFNAHME.npz
+  scripts/Kangaroo/datasets/DEINE_REAL_AUFNAHME.npz \
+  --all-arm-joints \
+  --arm-side both \
+  --split-joints
 
 # ROS-NPZ in SysID-NPZ konvertieren
 python scripts/Kangaroo/convert_kangaroo_real_npz.py \
@@ -127,11 +131,26 @@ python scripts/Kangaroo/convert_kangaroo_real_npz.py \
 
 # Konvertierte SysID-NPZ prüfen
 python scripts/Kangaroo/plot_kangaroo_sysid_npz.py \
-  scripts/Kangaroo/datasets/DEINE_REAL_AUFNAHME_sysid.npz
+  scripts/Kangaroo/datasets/DEINE_REAL_AUFNAHME_sysid.npz \
+  --all-arm-joints \
+  --arm-side both \
+  --split-joints
 
 # Vor Optimierung: Sim-vs-Real plotten
 python scripts/Kangaroo/plot_kangaroo_sim_vs_real.py \
-  scripts/Kangaroo/datasets/DEINE_REAL_AUFNAHME_sysid.npz
+  scripts/Kangaroo/datasets/DEINE_REAL_AUFNAHME_sysid.npz \
+  --all-arm-joints \
+  --arm-side both \
+  --split-joints
+```
+
+Mit `--split-joints` wird pro Armgelenk eine eigene PNG-Datei gespeichert.
+Die Plot-Ausgabe ist fest codiert:
+
+```text
+scripts/Kangaroo/datasets/plots_raw/
+scripts/Kangaroo/datasets/plots_sysid/
+scripts/Kangaroo/datasets/plots_sim_vs_real/
 ```
 
 ## Aktueller Workflow
@@ -140,31 +159,46 @@ python scripts/Kangaroo/plot_kangaroo_sim_vs_real.py \
 
 ```bash
 python scripts/Kangaroo/plot_kangaroo_real_npz.py \
-  scripts/Kangaroo/datasets/left_elbow_chirp_20260530_081011.npz
+  scripts/Kangaroo/datasets/Arms.npz \
+  --all-arm-joints \
+  --arm-side both \
+  --split-joints
 ```
 
 ### 2. ROS-NPZ in SysID-NPZ konvertieren
 
 ```bash
 python scripts/Kangaroo/convert_kangaroo_real_npz.py \
-  scripts/Kangaroo/datasets/left_elbow_chirp_20260530_081011.npz
+  scripts/Kangaroo/datasets/Arms.npz
 ```
 
 ### 3. Konvertierte SysID-NPZ prüfen
 
 ```bash
 python scripts/Kangaroo/plot_kangaroo_sysid_npz.py \
-  scripts/Kangaroo/datasets/left_elbow_chirp_20260530_081011_sysid.npz
+  scripts/Kangaroo/datasets/Arms_sysid.npz \
+  --all-arm-joints \
+  --arm-side both \
+  --split-joints
 ```
 
 ### 4. Vor Optimierung: MJX-vs-Real plotten
 
 ```bash
 python scripts/Kangaroo/plot_kangaroo_sim_vs_real.py \
-  scripts/Kangaroo/datasets/left_elbow_chirp_20260530_081011_sysid.npz
+  scripts/Kangaroo/datasets/Arms_sysid.npz \
+  --all-arm-joints \
+  --arm-side both \
+  --split-joints
 ```
 
-Der Plot wird automatisch in `scripts/Kangaroo/datasets/` gespeichert.
+Die Plots werden automatisch in den festen Unterordnern gespeichert, z.B.:
+
+```text
+plots_raw/Arms.arm_left_1_joint.topics.png
+plots_sysid/Arms_sysid.arm_left_1_joint.sysid.png
+plots_sim_vs_real/Arms_sysid.arm_left_1_joint.sim_vs_real.png
+```
 
 ### 5. Parameter optimieren
 
@@ -216,9 +250,11 @@ python scripts/Kangaroo/plot_kangaroo_sim_vs_real.py \
   scripts/Kangaroo/datasets/left_elbow_chirp_20260530_081011_sysid.npz \
   --armature 0.00394267 \
   --damping 0.00014238 \
-  --frictionloss 0.00010000 \
-  --out scripts/Kangaroo/datasets/left_elbow_chirp_optimized_sim_vs_real.png
+  --frictionloss 0.00010000
 ```
+
+Der Plot wird fest in `scripts/Kangaroo/datasets/plots_sim_vs_real/`
+gespeichert.
 
 ### 7. Video rendern
 
@@ -226,22 +262,22 @@ Nur MJX-Simulation:
 
 ```bash
 python scripts/Kangaroo/render_dataset_video.py \
-  --npz scripts/Kangaroo/datasets/left_elbow_chirp_20260530_081011_sysid.npz \
+  --npz scripts/Kangaroo/datasets/Arms_sysid.npz \
   --mode sim \
   --start 0 \
-  --stop 12560 \
-  --stride 4 \
-  --fps 50
+  --stop 28512 \
+  --stride 1 \
+  --fps 200
 ```
 
 Real links, MJX rechts:
 
 ```bash
 python scripts/Kangaroo/render_dataset_video.py \
-  --npz scripts/Kangaroo/datasets/left_elbow_chirp_20260530_081011_sysid.npz \
-  --mode side-by-side \
+  --npz scripts/Kangaroo/datasets/Arms_sysid.npz \
+  --mode sim \
   --start 0 \
-  --stop 12560 \
+  --stop 28512 \
   --stride 4 \
   --fps 50
 ```
@@ -330,8 +366,8 @@ Rendert ein Video aus realem Dataset-Playback und/oder MJX-Rollout.
 
 ![MJX sim vs real](datasets/left_elbow_chirp_20260530_081011_sysid.sim_vs_real.png)
 
-### MJX Animation
+### Arms Real-vs-Sim Animation
 
-![MJX rollout](datasets/left_elbow_chirp_mjx_sim.gif)
+![Arms MJX real vs sim](datasets/Arms_sysid.mjx_real_vs_sim.gif)
 
-[MP4 öffnen](datasets/left_elbow_chirp_mjx_sim.mp4)
+[MP4 öffnen](datasets/Arms_sysid.mjx_real_vs_sim.mp4)

@@ -1,11 +1,11 @@
 """Convert a real Kangaroo ROS-topic NPZ into the SysID NPZ format.
 
 Usage (from mjx_sysid-main/):
-    python scripts/convert_kangaroo_real_npz.py \
-        assets/datasets/kangaroo_grippers/left_elbow_chirp_20260530_081011.npz
+    python scripts/Kangaroo/convert_kangaroo_real_npz.py \
+        scripts/Kangaroo/datasets/Arms.npz
 
 Output:
-    assets/datasets/kangaroo_grippers/left_elbow_chirp_20260530_081011_sysid.npz
+    scripts/Kangaroo/datasets/Arms_sysid.npz
 
 The converter uses absolute ROS header times to synchronize topics. It resamples
 actual joint state and desired commands onto a uniform time grid because the
@@ -21,9 +21,9 @@ import mujoco
 import numpy as np
 
 
-ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_XML = ROOT / "assets/robots/kangaroo_grippers/kangaroo_grippers_mjx.xml"
-OUT_DIR = ROOT / "assets/datasets/kangaroo_grippers"
+KANGAROO_DIR = Path(__file__).resolve().parent
+DEFAULT_XML = KANGAROO_DIR / "Robot/kangaroo_grippers_mjx.xml"
+OUT_DIR = KANGAROO_DIR / "datasets"
 
 MEASURED_TOPIC = "subscriber_controller_actual_js_state"
 COMMAND_TOPIC = "subscriber_controller_desired_state"
@@ -186,13 +186,6 @@ def convert(
         sync_t1_abs=t1,
     )
 
-    elbow = "arm_left_4_joint"
-    act_idx = act_names.index(elbow)
-    jnt_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, elbow)
-    qpos_idx = model.jnt_qposadr[jnt_id]
-    qvel_idx = model.jnt_dofadr[jnt_id]
-    err = ctrl[:, act_idx] - qpos[:, qpos_idx]
-
     print(f"Saved -> {output_npz}")
     print(f"  time: {time.shape}, dt={dt:.6f}, duration={time[-1]:.3f}s")
     print(f"  ctrl: {ctrl.shape}, qpos: {qpos.shape}, qvel: {qvel.shape}")
@@ -201,21 +194,29 @@ def convert(
     print(f"  measured topic: {_topic_name(raw, measured_topic)}")
     print(f"  command topic:  {_topic_name(raw, command_topic)}")
     print(f"  overlap abs:    {t0:.6f} .. {t1:.6f}")
-    print("  arm_left_4_joint:")
-    print(f"    ctrl idx={act_idx}, qpos idx={qpos_idx}, qvel idx={qvel_idx}")
-    print(f"    ctrl range: {ctrl[:, act_idx].min(): .6f} .. {ctrl[:, act_idx].max(): .6f}")
-    print(f"    qpos range: {qpos[:, qpos_idx].min(): .6f} .. {qpos[:, qpos_idx].max(): .6f}")
-    print(f"    qvel range: {qvel[:, qvel_idx].min(): .6f} .. {qvel[:, qvel_idx].max(): .6f}")
-    print(
-        "    ctrl-q mean_abs/rms/max: "
-        f"{np.mean(np.abs(err)):.6f} / {np.sqrt(np.mean(err**2)):.6f} / {np.max(np.abs(err)):.6f}"
-    )
+    arm_joints = [f"arm_left_{i}_joint" for i in range(1, 8)]
+    arm_joints += [f"arm_right_{i}_joint" for i in range(1, 8)]
+    print("  arm joints:")
+    print("    joint                       act   qpos  qvel   ctrl_range              qpos_range")
+    for joint_name in arm_joints:
+        if joint_name not in act_names:
+            continue
+        jnt_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+        if jnt_id < 0:
+            continue
+        act_idx = act_names.index(joint_name)
+        qpos_idx = int(model.jnt_qposadr[jnt_id])
+        qvel_idx = int(model.jnt_dofadr[jnt_id])
+        print(
+            f"    {joint_name:<27} {act_idx:>3d}  {qpos_idx:>4d}  {qvel_idx:>4d}   "
+            f"{ctrl[:, act_idx].min(): .4f} .. {ctrl[:, act_idx].max(): .4f}   "
+            f"{qpos[:, qpos_idx].min(): .4f} .. {qpos[:, qpos_idx].max(): .4f}"
+        )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input_npz", type=Path)
-    parser.add_argument("--out", type=Path, default=None)
     parser.add_argument("--xml", type=Path, default=DEFAULT_XML)
     parser.add_argument("--measured-topic", default=MEASURED_TOPIC)
     parser.add_argument("--command-topic", default=COMMAND_TOPIC)
@@ -223,11 +224,7 @@ def main() -> None:
     args = parser.parse_args()
 
     input_npz = args.input_npz.resolve()
-    output_npz = (
-        args.out.resolve()
-        if args.out is not None
-        else OUT_DIR / f"{input_npz.stem}_sysid.npz"
-    )
+    output_npz = OUT_DIR / f"{input_npz.stem}_sysid.npz"
     output_npz.parent.mkdir(parents=True, exist_ok=True)
 
     convert(
