@@ -3,6 +3,7 @@
 Usage (from mjx_sysid-main/):
     python scripts/Kangaroo/plot_kangaroo_real_npz.py
     python scripts/Kangaroo/plot_kangaroo_real_npz.py scripts/Kangaroo/datasets/Arms.npz --all-arm-joints --split-joints
+    python scripts/Kangaroo/plot_kangaroo_real_npz.py scripts/Kangaroo/datasets/Arms.npz --all-joints
 
 The script uses absolute ROS header times to synchronize topics. Do not compare
 the per-topic *_header_time_rel arrays directly across topics.
@@ -31,6 +32,22 @@ COMMAND_TOPIC = "subscriber_controller_desired_state"
 JOINT_NAME = "arm_left_4_joint"
 LEFT_ARM_JOINTS = tuple(f"arm_left_{i}_joint" for i in range(1, 8))
 RIGHT_ARM_JOINTS = tuple(f"arm_right_{i}_joint" for i in range(1, 8))
+LEFT_LEG_JOINTS = (
+    "leg_left_1_joint",
+    "leg_left_2_joint",
+    "leg_left_3_joint",
+    "leg_left_length_joint",
+    "leg_left_4_joint",
+    "leg_left_5_joint",
+)
+RIGHT_LEG_JOINTS = (
+    "leg_right_1_joint",
+    "leg_right_2_joint",
+    "leg_right_3_joint",
+    "leg_right_length_joint",
+    "leg_right_4_joint",
+    "leg_right_5_joint",
+)
 
 
 def _topic_key(topic: str, suffix: str) -> str:
@@ -95,6 +112,186 @@ def _arm_joint_names(side: str) -> tuple[str, ...]:
     return LEFT_ARM_JOINTS + RIGHT_ARM_JOINTS
 
 
+def _leg_joint_names(side: str) -> tuple[str, ...]:
+    if side == "left":
+        return LEFT_LEG_JOINTS
+    if side == "right":
+        return RIGHT_LEG_JOINTS
+    return LEFT_LEG_JOINTS + RIGHT_LEG_JOINTS
+
+
+def _joint_group(joint_name: str) -> str:
+    if joint_name.startswith("arm_left_"):
+        return "arms/left"
+    if joint_name.startswith("arm_right_"):
+        return "arms/right"
+    if joint_name.startswith("leg_left_"):
+        return "legs/left"
+    if joint_name.startswith("leg_right_"):
+        return "legs/right"
+    if joint_name.startswith("pelvis_"):
+        return "pelvis"
+    if joint_name.startswith("gripper_"):
+        return "grippers"
+    return "other"
+
+
+def _plottable_joint_names(
+    *,
+    data: np.lib.npyio.NpzFile,
+    measured_topic: str,
+    command_topic: str,
+) -> tuple[str, ...]:
+    measured_names = list(_messages(data, measured_topic)[0]["name"])
+    command_names = list(_messages(data, command_topic)[0]["name"])
+    return tuple(name for name in command_names if name in measured_names)
+
+
+def _plot_joint_series(
+    *,
+    q_time: np.ndarray,
+    q: np.ndarray,
+    dq: np.ndarray,
+    ctrl_time: np.ndarray,
+    ctrl: np.ndarray,
+    joint_name: str,
+    out_path: Path,
+) -> dict[str, float]:
+    ctrl_on_q = np.interp(q_time, ctrl_time, ctrl)
+    err = ctrl_on_q - q
+
+    q_centered = q - np.mean(q)
+    ctrl_centered = ctrl_on_q - np.mean(ctrl_on_q)
+    corr = (
+        float(np.corrcoef(ctrl_centered, q_centered)[0, 1])
+        if np.std(q_centered) > 0 and np.std(ctrl_centered) > 0
+        else np.nan
+    )
+    err_rms = float(np.sqrt(np.mean(err**2)))
+    err_max = float(np.max(np.abs(err)))
+
+    fig, axes = plt.subplots(3, 1, figsize=(14, 8), sharex=True)
+    fig.suptitle(f"Real Kangaroo ROS topics - {joint_name}")
+
+    axes[0].plot(ctrl_time, ctrl, color="gray", linewidth=0.9, label="ctrl desired")
+    axes[0].plot(q_time, q, color="blue", linewidth=0.9, label="q actual")
+    axes[0].set_ylabel("position")
+    axes[0].legend(loc="upper right")
+    axes[0].grid(True, alpha=0.3)
+
+    axes[1].plot(
+        q_time,
+        err,
+        color="red",
+        linewidth=0.8,
+        label=f"ctrl_on_q - q, rms={err_rms:.3f}, max={err_max:.3f}",
+    )
+    axes[1].axhline(0.0, color="black", linewidth=0.5)
+    axes[1].set_ylabel("error")
+    axes[1].legend(loc="upper right")
+    axes[1].grid(True, alpha=0.3)
+
+    axes[2].plot(q_time, dq, color="green", linewidth=0.8, label="dq actual")
+    axes[2].set_ylabel("velocity")
+    axes[2].set_xlabel("time since overlap start [s]")
+    axes[2].legend(loc="upper right")
+    axes[2].grid(True, alpha=0.3)
+
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return {"err_rms": err_rms, "err_max": err_max, "corr": corr}
+
+
+def _plot_many_joints(
+    *,
+    data: np.lib.npyio.NpzFile,
+    npz_path: Path,
+    measured_topic: str,
+    command_topic: str,
+    joint_names: tuple[str, ...],
+    out_root: Path,
+    label: str,
+) -> None:
+    first_measured = _messages(data, measured_topic)[0]
+    first_command = _messages(data, command_topic)[0]
+    measured_names = list(first_measured["name"])
+    command_names = list(first_command["name"])
+
+    missing = [
+        name
+        for name in joint_names
+        if name not in measured_names or name not in command_names
+    ]
+    if missing:
+        raise ValueError(f"Missing joints in topics: {missing}")
+
+    q_time_abs = data[_topic_key(measured_topic, "header_time")].astype(float)
+    ctrl_time_abs = data[_topic_key(command_topic, "header_time")].astype(float)
+    t0 = max(float(q_time_abs[0]), float(ctrl_time_abs[0]))
+    t1 = min(float(q_time_abs[-1]), float(ctrl_time_abs[-1]))
+    if t1 <= t0:
+        raise ValueError(
+            "Measured and command topics do not overlap in absolute header time."
+        )
+
+    q_mask = (q_time_abs >= t0) & (q_time_abs <= t1)
+    ctrl_mask = (ctrl_time_abs >= t0) & (ctrl_time_abs <= t1)
+    q_time = q_time_abs[q_mask] - t0
+    ctrl_time = ctrl_time_abs[ctrl_mask] - t0
+    measured_msgs = _messages(data, measured_topic)[q_mask]
+    command_msgs = _messages(data, command_topic)[ctrl_mask]
+
+    print(f"\nReal Kangaroo {label} topic tracking check")
+    print(f"  file:          {npz_path}")
+    print(f"  measured:      {_topic_name(data, measured_topic)}")
+    print(f"  command:       {_topic_name(data, command_topic)}")
+    print(f"  joints:        {len(joint_names)}")
+    print(f"  overlap:       {t0:.6f} .. {t1:.6f} s ({t1 - t0:.3f} s)")
+    print(f"  out_dir:       {out_root}")
+    print("  joint                       q_rms_err    q_max_err    corr")
+
+    for joint_name in joint_names:
+        q_idx = measured_names.index(joint_name)
+        ctrl_idx = command_names.index(joint_name)
+        q = np.fromiter(
+            (msg["position"][q_idx] for msg in measured_msgs),
+            dtype=float,
+            count=len(measured_msgs),
+        )
+        dq = np.fromiter(
+            (
+                msg["velocity"][q_idx]
+                if "velocity" in msg and len(msg["velocity"]) > q_idx
+                else np.nan
+                for msg in measured_msgs
+            ),
+            dtype=float,
+            count=len(measured_msgs),
+        )
+        ctrl = np.fromiter(
+            (msg["position"][ctrl_idx] for msg in command_msgs),
+            dtype=float,
+            count=len(command_msgs),
+        )
+        out_path = out_root / _joint_group(joint_name) / f"{joint_name}.topics.png"
+        metrics = _plot_joint_series(
+            q_time=q_time,
+            q=q,
+            dq=dq,
+            ctrl_time=ctrl_time,
+            ctrl=ctrl,
+            joint_name=joint_name,
+            out_path=out_path,
+        )
+        print(
+            f"  {joint_name:<27} {metrics['err_rms']: .6f}   "
+            f"{metrics['err_max']: .6f}   {metrics['corr']: .4f}"
+        )
+        print(f"Saved -> {out_path}")
+
+
 def _plot_all_arm_joints(
     *,
     data: np.lib.npyio.NpzFile,
@@ -105,6 +302,18 @@ def _plot_all_arm_joints(
     split_joints: bool,
 ) -> None:
     joint_names = _arm_joint_names(side)
+    if split_joints:
+        _plot_many_joints(
+            data=data,
+            npz_path=npz_path,
+            measured_topic=measured_topic,
+            command_topic=command_topic,
+            joint_names=joint_names,
+            out_root=PLOT_DIR / npz_path.stem / "arms",
+            label=f"arm {side}",
+        )
+        return
+
     first_measured = _messages(data, measured_topic)[0]
     first_command = _messages(data, command_topic)[0]
     measured_names = list(first_measured["name"])
@@ -261,7 +470,14 @@ def main() -> None:
     parser.add_argument("npz", nargs="?", type=Path, default=DEFAULT_NPZ)
     parser.add_argument("--joint", default=JOINT_NAME)
     parser.add_argument("--all-arm-joints", action="store_true")
+    parser.add_argument("--all-leg-joints", action="store_true")
+    parser.add_argument(
+        "--all-joints",
+        action="store_true",
+        help="Plot every joint that exists in both measured and command topics into grouped subfolders.",
+    )
     parser.add_argument("--arm-side", choices=("left", "right", "both"), default="both")
+    parser.add_argument("--leg-side", choices=("left", "right", "both"), default="both")
     parser.add_argument(
         "--split-joints",
         action="store_true",
@@ -274,6 +490,23 @@ def main() -> None:
     npz_path = args.npz.resolve()
     data = np.load(npz_path, allow_pickle=True)
 
+    if args.all_joints:
+        joint_names = _plottable_joint_names(
+            data=data,
+            measured_topic=args.measured_topic,
+            command_topic=args.command_topic,
+        )
+        _plot_many_joints(
+            data=data,
+            npz_path=npz_path,
+            measured_topic=args.measured_topic,
+            command_topic=args.command_topic,
+            joint_names=joint_names,
+            out_root=PLOT_DIR / npz_path.stem,
+            label="all-joint",
+        )
+        return
+
     if args.all_arm_joints:
         _plot_all_arm_joints(
             data=data,
@@ -282,6 +515,18 @@ def main() -> None:
             command_topic=args.command_topic,
             side=args.arm_side,
             split_joints=args.split_joints,
+        )
+        return
+
+    if args.all_leg_joints:
+        _plot_many_joints(
+            data=data,
+            npz_path=npz_path,
+            measured_topic=args.measured_topic,
+            command_topic=args.command_topic,
+            joint_names=_leg_joint_names(args.leg_side),
+            out_root=PLOT_DIR / npz_path.stem,
+            label=f"leg {args.leg_side}",
         )
         return
 

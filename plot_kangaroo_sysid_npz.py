@@ -3,6 +3,7 @@
 Usage (from mjx_sysid-main/):
     python scripts/Kangaroo/plot_kangaroo_sysid_npz.py
     python scripts/Kangaroo/plot_kangaroo_sysid_npz.py scripts/Kangaroo/datasets/Arms_sysid.npz --all-arm-joints --split-joints
+    python scripts/Kangaroo/plot_kangaroo_sysid_npz.py scripts/Kangaroo/datasets/Arms_sysid.npz --all-joints
 
 Expected NPZ keys:
     time, ctrl, qpos, qvel, actuator_names, dt
@@ -34,6 +35,22 @@ QPOS_IDX = 12
 QVEL_IDX = 11
 LEFT_ARM_JOINTS = tuple(f"arm_left_{i}_joint" for i in range(1, 8))
 RIGHT_ARM_JOINTS = tuple(f"arm_right_{i}_joint" for i in range(1, 8))
+LEFT_LEG_JOINTS = (
+    "leg_left_1_joint",
+    "leg_left_2_joint",
+    "leg_left_3_joint",
+    "leg_left_length_joint",
+    "leg_left_4_joint",
+    "leg_left_5_joint",
+)
+RIGHT_LEG_JOINTS = (
+    "leg_right_1_joint",
+    "leg_right_2_joint",
+    "leg_right_3_joint",
+    "leg_right_length_joint",
+    "leg_right_4_joint",
+    "leg_right_5_joint",
+)
 
 
 def _get_scalar_str(data: np.lib.npyio.NpzFile, key: str, default: str = "") -> str:
@@ -49,6 +66,40 @@ def _arm_joint_names(side: str) -> tuple[str, ...]:
     if side == "right":
         return RIGHT_ARM_JOINTS
     return LEFT_ARM_JOINTS + RIGHT_ARM_JOINTS
+
+
+def _leg_joint_names(side: str) -> tuple[str, ...]:
+    if side == "left":
+        return LEFT_LEG_JOINTS
+    if side == "right":
+        return RIGHT_LEG_JOINTS
+    return LEFT_LEG_JOINTS + RIGHT_LEG_JOINTS
+
+
+def _joint_group(joint_name: str) -> str:
+    if joint_name.startswith("arm_left_"):
+        return "arms/left"
+    if joint_name.startswith("arm_right_"):
+        return "arms/right"
+    if joint_name.startswith("leg_left_"):
+        return "legs/left"
+    if joint_name.startswith("leg_right_"):
+        return "legs/right"
+    if joint_name.startswith("pelvis_"):
+        return "pelvis"
+    if joint_name.startswith("gripper_"):
+        return "grippers"
+    return "other"
+
+
+def _actuated_joint_names(model: mujoco.MjModel) -> tuple[str, ...]:
+    names = []
+    for act_id in range(model.nu):
+        joint_id = int(model.actuator_trnid[act_id, 0])
+        joint_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
+        if joint_name:
+            names.append(joint_name)
+    return tuple(names)
 
 
 def _name_to_id(model: mujoco.MjModel, obj_type: int, name: str) -> int:
@@ -77,8 +128,11 @@ def _metrics(ctrl: np.ndarray, q: np.ndarray, dt: float) -> dict[str, float]:
         if ctrl_rms > 0 and q_rms > 0
         else np.nan
     )
-    xcorr = np.correlate(q_centered, ctrl_centered, mode="full")
-    lag_samples = int(np.argmax(xcorr) - (len(ctrl_centered) - 1))
+    stride = max(1, int(np.ceil(len(ctrl_centered) / 5000)))
+    ctrl_lag = ctrl_centered[::stride]
+    q_lag = q_centered[::stride]
+    xcorr = np.correlate(q_lag, ctrl_lag, mode="full")
+    lag_samples = int(np.argmax(xcorr) - (len(ctrl_lag) - 1)) * stride
     return {
         "err_mean_abs": float(np.mean(np.abs(err))),
         "err_rms": float(np.sqrt(np.mean(err**2))),
@@ -141,6 +195,53 @@ def _plot_one(
     return m
 
 
+def _plot_joint_set(
+    *,
+    data: np.lib.npyio.NpzFile,
+    model: mujoco.MjModel,
+    npz_path: Path,
+    xml_path: Path,
+    time: np.ndarray,
+    dt: float,
+    joint_names: tuple[str, ...],
+    out_root: Path,
+    label: str,
+) -> None:
+    out_root.mkdir(parents=True, exist_ok=True)
+    print(f"\nConverted SysID NPZ {label} check")
+    print(f"  file:          {npz_path}")
+    print(f"  XML:           {xml_path.resolve()}")
+    print(f"  source:        {_get_scalar_str(data, 'source_npz', '-')}")
+    print(f"  samples:       {len(time)}")
+    print(f"  dt:            {dt:.6f} s")
+    print(f"  out_dir:       {out_root}")
+    print("  joint                       act  qpos  qvel   rms_err   max_err   corr")
+
+    for joint_name in joint_names:
+        act_idx, qpos_idx, qvel_idx = _joint_indices(model, joint_name)
+        ctrl_j = data["ctrl"][:, act_idx].astype(float)
+        q_j = data["qpos"][:, qpos_idx].astype(float)
+        dq_j = data["qvel"][:, qvel_idx].astype(float)
+        out_path = out_root / _joint_group(joint_name) / f"{joint_name}.sysid.png"
+        m = _plot_one(
+            time=time,
+            ctrl=ctrl_j,
+            q=q_j,
+            dq=dq_j,
+            joint_name=joint_name,
+            act_idx=act_idx,
+            qpos_idx=qpos_idx,
+            qvel_idx=qvel_idx,
+            dt=dt,
+            out=out_path,
+        )
+        print(
+            f"  {joint_name:<27} {act_idx:>3d}  {qpos_idx:>4d}  {qvel_idx:>4d}   "
+            f"{m['err_rms']: .6f}  {m['err_max']: .6f}  {m['corr']: .4f}"
+        )
+        print(f"Saved -> {out_path}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("npz", nargs="?", type=Path, default=DEFAULT_NPZ)
@@ -150,7 +251,14 @@ def main() -> None:
     parser.add_argument("--qpos-idx", type=int, default=QPOS_IDX)
     parser.add_argument("--qvel-idx", type=int, default=QVEL_IDX)
     parser.add_argument("--all-arm-joints", action="store_true")
+    parser.add_argument("--all-leg-joints", action="store_true")
+    parser.add_argument(
+        "--all-joints",
+        action="store_true",
+        help="Plot every actuated model joint into grouped subfolders.",
+    )
     parser.add_argument("--arm-side", choices=("left", "right", "both"), default="both")
+    parser.add_argument("--leg-side", choices=("left", "right", "both"), default="both")
     parser.add_argument(
         "--split-joints",
         action="store_true",
@@ -165,41 +273,46 @@ def main() -> None:
     time = data["time"].astype(float)
     dt = float(data["dt"]) if "dt" in data.files else float(np.median(np.diff(time)))
 
-    if args.all_arm_joints:
-        out_dir = PLOT_DIR
-        out_dir.mkdir(parents=True, exist_ok=True)
-        print("\nConverted SysID NPZ arm-joint check")
-        print(f"  file:          {npz_path}")
-        print(f"  XML:           {args.xml.resolve()}")
-        print(f"  source:        {_get_scalar_str(data, 'source_npz', '-')}")
-        print(f"  side:          {args.arm_side}")
-        print(f"  samples:       {len(time)}")
-        print(f"  dt:            {dt:.6f} s")
-        print("  joint                       act  qpos  qvel   rms_err   max_err   corr")
+    if args.all_joints:
+        _plot_joint_set(
+            data=data,
+            model=model,
+            npz_path=npz_path,
+            xml_path=args.xml,
+            time=time,
+            dt=dt,
+            joint_names=_actuated_joint_names(model),
+            out_root=PLOT_DIR / npz_path.stem,
+            label="all-joint",
+        )
+        return
 
-        for joint_name in _arm_joint_names(args.arm_side):
-            act_idx, qpos_idx, qvel_idx = _joint_indices(model, joint_name)
-            ctrl_j = data["ctrl"][:, act_idx].astype(float)
-            q_j = data["qpos"][:, qpos_idx].astype(float)
-            dq_j = data["qvel"][:, qvel_idx].astype(float)
-            out_path = out_dir / f"{npz_path.stem}.{joint_name}.sysid.png"
-            m = _plot_one(
-                time=time,
-                ctrl=ctrl_j,
-                q=q_j,
-                dq=dq_j,
-                joint_name=joint_name,
-                act_idx=act_idx,
-                qpos_idx=qpos_idx,
-                qvel_idx=qvel_idx,
-                dt=dt,
-                out=out_path,
-            )
-            print(
-                f"  {joint_name:<27} {act_idx:>3d}  {qpos_idx:>4d}  {qvel_idx:>4d}   "
-                f"{m['err_rms']: .6f}  {m['err_max']: .6f}  {m['corr']: .4f}"
-            )
-            print(f"Saved -> {out_path}")
+    if args.all_arm_joints:
+        _plot_joint_set(
+            data=data,
+            model=model,
+            npz_path=npz_path,
+            xml_path=args.xml,
+            time=time,
+            dt=dt,
+            joint_names=_arm_joint_names(args.arm_side),
+            out_root=PLOT_DIR / npz_path.stem,
+            label=f"arm {args.arm_side}",
+        )
+        return
+
+    if args.all_leg_joints:
+        _plot_joint_set(
+            data=data,
+            model=model,
+            npz_path=npz_path,
+            xml_path=args.xml,
+            time=time,
+            dt=dt,
+            joint_names=_leg_joint_names(args.leg_side),
+            out_root=PLOT_DIR / npz_path.stem,
+            label=f"leg {args.leg_side}",
+        )
         return
 
     ctrl = data["ctrl"][:, args.act_idx].astype(float)
